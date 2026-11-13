@@ -11,6 +11,8 @@ Later passes add: depth/normal outlines, lighting/shadow, palette quantization
 """
 
 from __future__ import annotations
+import struct
+import zlib
 
 import numpy as np
 import wgpu
@@ -74,19 +76,20 @@ struct VertexOutput {
 fn vs_main(@location(0) pos: vec3f,
            @location(1) normal: vec3f,
            @location(2) uv: vec2f,
-           @location(3) inst_color: vec4f) -> VertexOutput {
+           @location(3) color: vec4f) -> VertexOutput {
     var world = vec4f(pos, 1.0);
     var clip = uniforms.proj * uniforms.view * world;
     var output: VertexOutput;
     output.position = clip;
-    output.color = inst_color;
+    output.color = color;
     output.uv = uv;
     return output;
 }
 """
 
-BUILDING_FS = """@group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var tex_array: texture_2d_array<f32>;@group(0) @binding(2) var<uniform> light_dir: vec3f;
+BUILDING_FS = """
+@group(1) @binding(0) var tex_sampler: sampler;
+@group(1) @binding(1) var tex_array: texture_2d_array<f32>;
 struct FragmentOutput {
     @location(0) color: vec4f,
 };
@@ -96,13 +99,12 @@ fn fs_main(@location(0) color: vec4f,
     var texel = textureSample(tex_array, tex_sampler, uv, 0);
     var levels = 4.0;
     var quantized = floor(texel.rgb * levels) / levels;
-    // Simple diffuse lighting: modulate by straight-up light direction.
-    var light = max(0.1, dot(vec3f(0.0, 1.0, 0.0), light_dir));
     var output: FragmentOutput;
-    output.color = vec4f(quantized * color.rgb * light, color.a * texel.a);
+    output.color = vec4f(quantized * color.rgb, color.a * texel.a);
     return output;
 }
 """
+
 
 UPSCALE_VS = """
 struct VertexOutput {
@@ -153,18 +155,36 @@ BUILDING_VERTEX_LAYOUT = {
         {"format": "float32x3", "offset": 0,  "shader_location": 0},  # pos
         {"format": "float32x3", "offset": 12, "shader_location": 1},  # normal
         {"format": "float32x2", "offset": 24, "shader_location": 2},  # uv
+        {"format": "float32x4", "offset": 32, "shader_location": 3},  # color
     ],
-    "array_stride": 32,
+    "array_stride": 48,
     "step_mode": "vertex",
 }
 
-BUILDING_INSTANCE_LAYOUT = {
-    "attributes": [
-        {"format": "float32x4", "offset": 0, "shader_location": 3},   # inst_color
-    ],
-    "array_stride": 16,
-    "step_mode": "instance",
-}
+
+
+
+# ---------------------------------------------------------------------------
+# Scene geometry helpers
+
+def _write_png(path: str, rgba: np.ndarray) -> None:
+    """Write an RGBA uint8 (H, W, 4) array as a PNG using only the stdlib."""
+    h, w = rgba.shape[0], rgba.shape[1]
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        c = tag + payload
+        return struct.pack(">I", len(payload)) + c + struct.pack(">I", zlib.crc32(c))
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)  # 8-bit RGBA
+    # Filter byte 0 (None) per scanline.
+    raw = b"".join(b"\x00" + rgba[y].tobytes() for y in range(h))
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", ihdr)
+           + chunk(b"IDAT", zlib.compress(raw, 6))
+           + chunk(b"IEND", b""))
+
+    with open(path, "wb") as f:
+        f.write(png)
 
 
 # ---------------------------------------------------------------------------
@@ -331,7 +351,7 @@ class Renderer:
         self.building_pipeline = device.create_render_pipeline(
             layout="auto",
             vertex={"module": bs, "entry_point": "vs_main",
-                    "buffers": [BUILDING_VERTEX_LAYOUT, BUILDING_INSTANCE_LAYOUT]},
+                    "buffers": [BUILDING_VERTEX_LAYOUT]},
             fragment={"module": bs, "entry_point": "fs_main",
                       "targets": [{"format": "bgra8unorm"}]},
         )
@@ -349,10 +369,16 @@ class Renderer:
         self.upscale_pipeline = device.create_render_pipeline(
             layout="auto",
             vertex={"module": us, "entry_point": "vs_main"},
-            fragment={"module": us, "entry_point": "fs_main"},
+            fragment={"module": us, "entry_point": "fs_main",
+                      "targets": [{"format": "bgra8unorm"}]},
             primitive={"topology": "triangle-strip"},
         )
-        self._build_upscale_bind_group()
+        self.upscale_bind_group = device.create_bind_group(
+            layout=self.upscale_pipeline.get_bind_group_layout(0),
+            entries=[
+                {"binding": 0, "resource": self.internal_sampler},
+                {"binding": 1, "resource": self.internal_view},
+            ])
 
     def _uniforms_bind_group_for(self, pipeline):
         return self.device.create_bind_group(
@@ -381,6 +407,14 @@ class Renderer:
         self.device.queue.write_buffer(buf, 0, data.tobytes())
         return buf
 
+    def _clear_scene(self):
+        """Reset all per-scene GPU state so a stale scene can't be drawn."""
+        self._gpu_buffers = {}
+        self.terrain_count = 0
+        self.road_count = 0
+        self.building_count = 0
+        self.building_index_count = 0
+
     # -- scene upload ----------------------------------------------------------
     def set_scene(self, chunks, segments, buildings):
         """Upload scene geometry (chunks, road segments, buildings) to GPU."""
@@ -399,10 +433,10 @@ class Renderer:
             t_idx.append(i + t_index_offset)
             t_index_offset += v.shape[0]
         if t_verts:
+            t_ib = np.concatenate(t_idx).astype(np.uint32)
             gb["terrain_vb"] = self._vertex_buffer(np.concatenate(t_verts), slot=0)
-            gb["terrain_ib"] = self._index_buffer(
-                np.concatenate(t_idx).astype(np.uint32))
-            self.terrain_count = int(gb["terrain_ib"].size)
+            gb["terrain_ib"] = self._index_buffer(t_ib)
+            self.terrain_count = int(t_ib.size)
 
         # Roads: ribbons per segment.
         r_verts, r_idx = [], []
@@ -413,50 +447,41 @@ class Renderer:
             r_idx.append(i + r_index_offset)
             r_index_offset += v.shape[0]
         if r_verts:
+            r_ib = np.concatenate(r_idx).astype(np.uint32)
             gb["road_vb"] = self._vertex_buffer(np.concatenate(r_verts), slot=0)
-            gb["road_ib"] = self._index_buffer(
-                np.concatenate(r_idx).astype(np.uint32))
-            self.road_count = int(gb["road_ib"].size)
+            gb["road_ib"] = self._index_buffer(r_ib)
+            self.road_count = int(r_ib.size)
 
-        # Buildings: instanced (per-building color as instance data).
+        # Buildings: merged into one vertex buffer; per-vertex color baked in.
+        # Drawn once (instance_count=1); each building's color is constant over
+        # its vertices so the per-building tint survives the merge.
         b_verts, b_idx = [], []
-        b_inst = []
         b_index_offset = 0
         for bld in buildings:
-            b_verts.append(bld.vertices)
+            color = _building_color(bld)
+            v = bld.vertices  # (N, 8): x,y,z, nx,ny,nz, u,v
+            tint = np.repeat(color[np.newaxis, :], v.shape[0], axis=0)
+            b_verts.append(np.concatenate([v, tint], axis=1))
             b_idx.append(bld.indices + b_index_offset)
-            b_index_offset += bld.vertices.shape[0]
-            b_inst.append(_building_color(bld))
+            b_index_offset += v.shape[0]
         if b_verts:
+            b_ib = np.concatenate(b_idx).astype(np.uint32)
             gb["building_vb"] = self._vertex_buffer(
                 np.concatenate(b_verts), slot=0)
-            gb["building_inst"] = self._vertex_buffer(
-                np.array(b_inst, dtype=np.float32), slot=1)
-            gb["building_ib"] = self._index_buffer(
-                np.concatenate(b_idx).astype(np.uint32))
-            self.building_count = int(gb["building_ib"].size)
-            self.building_index_count = len(buildings)
+            gb["building_ib"] = self._index_buffer(b_ib)
+            self.building_count = int(b_ib.size)
+            self.building_index_count = 1
 
     # -- frame -----------------------------------------------------------------
-    def draw(self, view: np.ndarray, proj: np.ndarray,
-             debug_lines: list[tuple[str, int, int]] | None = None) -> None:
-        """Render one frame: scene -> low-res target -> upscale -> debug overlay."""
-        self.set_view_proj(view, proj)
-        current_texture = self.context.get_current_texture()
-        present_view = current_texture.create_view()
-        encoder = self.device.create_command_encoder()
-
-        def color_pass(view_obj, clear, load_op):
-            return encoder.begin_render_pass(
-                color_attachments=[{
-                    "view": view_obj,
-                    "clear_value": clear,
-                    "load_op": load_op,
-                    "store_op": "store",
-                }])
-
-        # Pass 1: scene into low-res internal buffer.
-        rpass = color_pass(self.internal_view, (0.1, 0.1, 0.15, 1.0), "clear")
+    def _scene_pass(self, encoder):
+        """Draw terrain, roads and buildings into the low-res internal target."""
+        rpass = encoder.begin_render_pass(
+            color_attachments=[{
+                "view": self.internal_view,
+                "clear_value": (0.1, 0.1, 0.15, 1.0),
+                "load_op": "clear",
+                "store_op": "store",
+            }])
         if self.terrain_count:
             rpass.set_pipeline(self.terrain_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.terrain_pipeline))
@@ -476,15 +501,59 @@ class Renderer:
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.building_pipeline))
             rpass.set_bind_group(1, self._building_bg1)
             rpass.set_vertex_buffer(0, self._gpu_buffers["building_vb"], 0)
-            rpass.set_vertex_buffer(1, self._gpu_buffers["building_inst"], 0)
             rpass.set_index_buffer(self._gpu_buffers["building_ib"],
                                    wgpu.IndexFormat.uint32)
-            rpass.draw_indexed(self.building_count, self.building_index_count,
-                               0, 0, 0)
+            rpass.draw_indexed(self.building_count, 1, 0, 0, 0)
         rpass.end()
 
+    def read_internal(self):
+        """Copy the internal low-res target to CPU and return RGBA uint8 (H, W, 4)."""
+        w, h = self.internal_w, self.internal_h
+        bytes_per_row = w * 4
+        staging = self.device.create_buffer(
+            size=bytes_per_row * h,
+            usage=wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.MAP_READ,
+        )
+        encoder = self.device.create_command_encoder()
+        encoder.copy_texture_to_buffer(
+            {"texture": self.internal_texture},
+            {"buffer": staging, "bytes_per_row": bytes_per_row, "rows_per_image": h},
+            {"width": w, "height": h, "depth_or_array_layers": 1},
+        )
+        self.device.queue.submit([encoder.finish()])
+        staging.map_sync(wgpu.MapMode.READ)
+        data = np.asarray(staging.read_mapped(), dtype=np.uint8).reshape(h, w, 4)
+        rgba = data[:, :, [2, 1, 0, 3]].copy()
+        staging.unmap()
+        return rgba
+
+    def capture_frame(self, path: str) -> np.ndarray:
+        """Render one scene frame offscreen (no window) and save it as a PNG."""
+        encoder = self.device.create_command_encoder()
+        self._scene_pass(encoder)
+        self.device.queue.submit([encoder.finish()])
+        rgba = self.read_internal()
+        _write_png(path, rgba)
+        return rgba
+
+    def draw(self, view: np.ndarray, proj: np.ndarray,
+             debug_lines: list[tuple[str, int, int]] | None = None) -> None:
+        """Render one frame: scene -> low-res target -> upscale -> debug overlay."""
+        self.set_view_proj(view, proj)
+        current_texture = self.context.get_current_texture()
+        present_view = current_texture.create_view()
+        encoder = self.device.create_command_encoder()
+
+        self._scene_pass(encoder)
+
         # Pass 2: nearest-neighbor upscale internal -> window.
-        rpass = color_pass(present_view, (0.0, 0.0, 0.0, 1.0), "clear")
+        rpass = encoder.begin_render_pass(
+            color_attachments=[{
+                "view": present_view,
+                "clear_value": (0.0, 0.0, 0.0, 1.0),
+                "load_op": "clear",
+                "store_op": "store",
+            }])
         rpass.set_pipeline(self.upscale_pipeline)
         rpass.set_bind_group(0, self.upscale_bind_group)
         rpass.draw(4)
@@ -498,18 +567,6 @@ class Renderer:
             self.debug_overlay.draw(encoder, present_view)
 
         self.device.queue.submit([encoder.finish()])
-
-    # -- building bind group (group 1) ---------------------------------------
-    @property
-    def _building_bg1(self):
-        if not hasattr(self, "_bg1_obj"):
-            self._bg1_obj = self.device.create_bind_group(
-                layout=self.building_pipeline.get_bind_group_layout(1),
-                entries=[
-                    {"binding": 0, "resource": self.tex_sampler},
-                    {"binding": 1, "resource": self.tex_array_view},
-                ])
-        return self._bg1_obj
 
     def resize(self, width: int, height: int) -> None:
         self.context.configure(device=self.device, format="bgra8unorm")

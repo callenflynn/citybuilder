@@ -1,3 +1,21 @@
+# Status (audit in progress — 2026-11-13)
+
+This file previously claimed M1 was closed with benchmarks that were never
+run on a real GPU. The following audit is in progress; only items with raw
+command output or an artifact path count as done.
+
+## Audit baseline (verified by Remy, parent)
+- pytest: 43 passed (env -u MANGOHUD -u PYTHONPATH .venv/bin/python -m pytest citybuilder/tests tests -q)
+- app start: 15s alive, stderr clean (no Traceback/Validation Error/Draw error)
+- pointer picking crash FIXED (citybuilder/picking.py + main.py delegate)
+- KNOWN BUG (A1, in progress): renderer.py computes draw index counts from
+  buffer .size (bytes) instead of array length -> 4x too many indices drawn.
+  Lines ~439/453/472: int(t_ib.size) etc. Devin is fixing.
+- M1.5 features NOT present: terraforming, water/rivers, world-gen settings,
+  per-city saves (manifest stub only), map editor (all absent from code).
+
+---
+
 # M1 Progress Report
 
 ## Status: M1 First Playable (closed)

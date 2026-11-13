@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import sys
 import time
-import math
 
 from rendercanvas.auto import RenderCanvas, loop
 
@@ -28,13 +27,16 @@ from .world.chunks import ChunkManager
 from .world.lots import LotGenerator
 from .world.roadgraph import RoadGraph
 from .world.buildings import make_building, BuildingDef
+from . import picking
 
 
 class App:
     def __init__(self):
         self.canvas = RenderCanvas(
             size=(config.WINDOW_WIDTH, config.WINDOW_HEIGHT),
-            title="Pixel City Builder (M1)",
+            title="citybuilder (M1)",
+            update_mode="continuous",
+            max_fps=config.RENDER_FPS,
         )
         self.context = self.canvas.get_context("wgpu")
         self.adapter = wgpu.gpu.request_adapter_sync(
@@ -70,16 +72,17 @@ class App:
 
         # register pointer events
         self.canvas.add_event_handler(self._handle_pointer,
+                                      "key_down",
                                       "pointer_down", "pointer_move", "pointer_up")
 
-    # ------------------------------------------------------------------
-    # Event dispatch
-    # ---------------------------------------------------------------
     def _handle_pointer(self, event):
-        etype = event.type
-        key = event.key
+        """Dispatch a rendercanvas event dict.
+
+        rendercanvas events are plain dicts: {"event_type": ..., ...}.
+        """
+        etype = event["event_type"]
         if etype == "key_down":
-            self._on_key(key)
+            self._on_key(event["key"])
         elif etype == "pointer_down":
             self._on_pointer_down(event)
         elif etype == "pointer_move":
@@ -99,15 +102,15 @@ class App:
             self.camera.zoom(1.1)
         elif key == "ArrowDown":
             self.camera.zoom(0.9)
-        elif key == "KeyR":
+        elif key == "r":
             self.camera = Camera()
-        elif key == "KeyB":
+        elif key == "b":
             self._building_mode = not self._building_mode
             print(f"Building mode: {'ON' if self._building_mode else 'OFF'}")
 
     # --- pointer --------------------------------------------------------
     def _on_pointer_down(self, event):
-        x, y = event.x, event.y
+        x, y = event["x"], event["y"]
         self._road_mode = True
         self._road_start_px = (x, y)
         self._road_preview_node = self._snap_mouse_to_road(x, y)
@@ -115,7 +118,7 @@ class App:
     def _on_pointer_move(self, event):
         if not self._road_mode:
             return
-        x, y = event.x, event.y
+        x, y = event["x"], event["y"]
         self._road_preview_node = self._snap_mouse_to_road(x, y)
 
     def _on_pointer_up(self, event):
@@ -125,17 +128,10 @@ class App:
         self._road_preview_node = None
 
     # --- picking --------------------------------------------------------
-    # world -> rough screen conversion: we approximate by comparing world dist
-    # to a hardcoded snap radius and accepting the first node that falls within.
+    # Real camera-based pick: unproject the mouse into a world ray and find
+    # the road node (or nearest segment endpoint) under the click.
     def _snap_mouse_to_road(self, mx: int, my: int) -> int | None:
-        if not self.road_graph.nodes:
-            return None
-        for nid, npos in self.road_graph.nodes.items():
-            # rough world-distance check; 20 world units roughly maps to
-            # the click radius in the demo viewport.
-            if (npos[0] * npos[0] + npos[1] * npos[1]) < 400:
-                return nid
-        return None
+        return picking.pick_road_node(self.road_graph, self.camera, mx, my)
 
     # --- road placement ------------------------------------------------
     def _place_road_from_preview(self):
@@ -143,12 +139,12 @@ class App:
             self._road_mode = False
             return
         end_node = self._road_preview_node
-        # pick start node nearest to the original click area (approximate)
-        start_node = min(self.road_graph.nodes.keys(),
-                         key=lambda n: math.hypot(
-                             self.road_graph.nodes[n].pos[0],
-                             self.road_graph.nodes[n].pos[1]))
-        if end_node != start_node:
+        # pick the start node nearest to the original click (the pointer-down
+        # position), so a click-drag places a segment from where the user
+        # pressed to where they released.
+        start_node = picking.pick_road_node(
+            self.road_graph, self.camera, *self._road_start_px)
+        if start_node is None or end_node != start_node:
             new_seg = self.road_graph.add_segment(start_node, end_node)
             if new_seg is not None:
                 self.lot_gen.generate()
@@ -191,7 +187,7 @@ class App:
             bid += 1
 
     # --- frame -----------------------------------------------------------
-    def on_draw(self, dt: float):
+    def on_draw(self, dt: float = 0.0):
         t0 = time.perf_counter()
         self._accum += dt
         steps = 0
