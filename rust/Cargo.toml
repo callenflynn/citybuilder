@@ -1,0 +1,22 @@
+[package]
+name = "citybuilder-sim"
+version = "0.1.0-m0"
+edition = "2021"
+description = "Rust simulation core for Pixel City Builder (PyO3 bindings)"
+
+[lib]
+name = "citybuilder_sim"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3: Python bindings. The 'abi3' feature keeps the built wheel portable
+# across Python minor versions.
+pyo3 = { version = "0.22", features = ["abi3"] }
+
+# NumPy interop (ndarray + pyo3-numpy) is intentionally NOT added yet.
+# Per the plan, simulation systems stay in Python until profiling shows a hot
+# spot; the first Rust port will expose its state as NumPy arrays here so
+# Python debug tools can inspect it.
+
+[profile.release]
+opt-level = 3

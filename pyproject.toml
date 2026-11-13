@@ -1,0 +1,35 @@
+[project]
+name = "citybuilder"
+version = "0.1.0"
+description = "Pixel City Builder: Linux-first city builder, Python frontend + Rust sim core"
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "cal" }]
+dependencies = [
+    "numpy>=2.0",
+    "wgpu>=0.32",
+    "rendercanvas>=3.0",
+    "glfw>=2.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-benchmark>=4",
+    "pyinstrument>=4",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["citybuilder/tests", "tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.black]
+line-length = 88
