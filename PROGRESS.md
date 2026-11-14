@@ -8,11 +8,28 @@ command output or an artifact path count as done.
 - pytest: 43 passed (env -u MANGOHUD -u PYTHONPATH .venv/bin/python -m pytest citybuilder/tests tests -q)
 - app start: 15s alive, stderr clean (no Traceback/Validation Error/Draw error)
 - pointer picking crash FIXED (citybuilder/picking.py + main.py delegate)
-- KNOWN BUG (A1, in progress): renderer.py computes draw index counts from
-  buffer .size (bytes) instead of array length -> 4x too many indices drawn.
-  Lines ~439/453/472: int(t_ib.size) etc. Devin is fixing.
+- RETRACTED (was a false alarm): renderer.py index counts use int(t_ib.size)
+  on 1-D uint32 numpy arrays, where .size == element count (verified:
+  shape[0]==size==6, nbytes==24). NOT a bug. Only dead code left:
+  building_index_count (set 0/1, never read) - cosmetic, not fixing now.
 - M1.5 features NOT present: terraforming, water/rivers, world-gen settings,
   per-city saves (manifest stub only), map editor (all absent from code).
+
+## A2 VERIFIED (2026-11-13, by Remy with raw evidence)
+- ROOT CAUSE FOUND+FIXED: set_view_proj uploaded numpy row-major bytes, but
+  WGSL mat4x4<f32> is column-major. Shader saw view^T/proj^T. Identity is
+  symmetric so it masked the bug; real camera matrices rendered nothing.
+  Fix: upload view.T/proj.T. Also added COPY_SRC to internal texture USAGE
+  (copy_texture_to_buffer needs it). Proof: before fix, hardcoded triangle
+  with real camera matrices = 0 non-clear pixels; after fix = 2183.
+- HEADLESS CLI WORKS: `python -m citybuilder --screenshot docs/verification`
+  writes city_yaw0/45/90.png. Each verified: std 95-98, distinct colors 5-6,
+  sky(dark)/grass(green)/buildings(white) all present, horizon at y~253/360.
+- Tests: 45 passed (43 + 2 new test_screenshot.py). compileall OK.
+- KNOWN ISSUE (not a bug): yaw=180 @ pitch=35 is grazing-angle -> mostly sky;
+  pitch 50-70 shows terrain. Camera placement, not renderer.
+- GUI window does not map on this compositor (libdecor-gtk fallback fails);
+  headless --screenshot is the verification path. docs/manual-test/groupA.md.
 
 ---
 

@@ -25,7 +25,8 @@ from ..world.chunks import build_chunk_mesh
 _UNIFORM_FLOATS = 32
 _UNIFORM_BYTES = _UNIFORM_FLOATS * 4
 
-USAGE = wgpu.TextureUsage.RENDER_ATTACHMENT | wgpu.TextureUsage.TEXTURE_BINDING
+USAGE = (wgpu.TextureUsage.RENDER_ATTACHMENT | wgpu.TextureUsage.TEXTURE_BINDING
+         | wgpu.TextureUsage.COPY_SRC)
 
 UNIFORMS_VS_BLOCK = """
 struct Uniforms {
@@ -293,8 +294,11 @@ class Renderer:
                                    "size": _UNIFORM_BYTES}}])
 
     def set_view_proj(self, view: np.ndarray, proj: np.ndarray):
+        # WGSL mat4x4<f32> is column-major; numpy is row-major. Upload the
+        # transpose so the shader reads view/proj as intended (identity is
+        # symmetric so this bug was invisible until real camera matrices).
         data = np.ascontiguousarray(
-            np.stack([view, proj]).astype(np.float32).reshape(-1))
+            np.stack([view.T, proj.T]).astype(np.float32).reshape(-1))
         assert data.size == _UNIFORM_FLOATS
         self.device.queue.write_buffer(self.uniforms_buffer, 0, data.tobytes())
 

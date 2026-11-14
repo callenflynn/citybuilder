@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import sys
 import time
+import math
+import os
+import argparse
 
 from rendercanvas.auto import RenderCanvas, loop
 
@@ -238,7 +241,82 @@ class App:
         loop.run()
 
 
+def _build_headless_app():
+    """Build an App-like object with a GPU device but no window/canvas.
+
+    Reuses App._build_demo_city for the scene. capture_frame() does not touch
+    self.canvas or self.context, so a minimal object is enough.
+    """
+    adapter = wgpu.gpu.request_adapter_sync(power_preference="high-performance")
+    device = adapter.request_device_sync()
+
+    app = App.__new__(App)
+    app.device = device
+    app.camera = Camera()
+    app.sim = SimLoop(SimConfig(tick_rate=config.SIM_TICK_RATE,
+                                seed=config.DEFAULT_SEED))
+    app.chunk_mgr = ChunkManager(seed=config.DEFAULT_SEED)
+    app.road_graph = RoadGraph()
+    app.lot_gen = LotGenerator(app.road_graph)
+    app.buildings = {}
+    app.renderer = Renderer(device, context=None)
+    app._build_demo_city()
+    return app
+
+
+def render_screenshots(outdir, angles, distance, pitch):
+    """Render the demo city headless at each camera angle; return PNG paths."""
+    import numpy as np
+    os.makedirs(outdir, exist_ok=True)
+    app = _build_headless_app()
+    paths = []
+    for yaw_deg in angles:
+        app.camera.yaw = math.radians(yaw_deg)
+        app.camera.distance = distance
+        app.camera.tilt = math.radians(pitch)
+        app.camera.update(0.0)
+        cam_x, _, cam_z = app.camera.position()
+        chunks = app.chunk_mgr.update(cam_x, cam_z, radius_chunks=3)
+        app.renderer.set_scene(chunks, app.road_graph.segment_list(),
+                               list(app.buildings.values()))
+        app.renderer.set_view_proj(app.camera.view_matrix(),
+                                   app.camera.projection_matrix())
+        path = os.path.join(outdir, "city_yaw%d.png" % int(yaw_deg))
+        rgba = app.renderer.capture_frame(path)
+        assert rgba.dtype == np.uint8, rgba.dtype
+        assert rgba.ndim == 3 and rgba.shape[2] == 4, rgba.shape
+        std = float(rgba.std())
+        quant = (rgba[:, :, :3] // 64).reshape(-1, 3)
+        distinct = len(np.unique(quant, axis=0))
+        h, w = rgba.shape[:2]
+        top = rgba[:h // 3, :, :3].mean(axis=(0, 1)).round(1)
+        mid = rgba[h // 3:2 * h // 3, :, :3].mean(axis=(0, 1)).round(1)
+        bot = rgba[2 * h // 3:, :, :3].mean(axis=(0, 1)).round(1)
+        print("%s: shape=%s std=%.2f distinct=%d top=%s mid=%s bot=%s"
+              % (os.path.basename(path), rgba.shape, std, distinct, top, mid, bot))
+        assert std > 0, "flat image"
+        assert distinct >= 3, "fewer than 3 dominant colors"
+        paths.append(path)
+    return paths
+
+
 def main():
+    ap = argparse.ArgumentParser(prog="citybuilder")
+    ap.add_argument("--screenshot", metavar="OUTDIR", default=None,
+                    help="render the demo city headless and write PNGs to OUTDIR")
+    ap.add_argument("--angles", default="0,45,90",
+                    help="comma-separated camera yaw degrees (default 0,45,90)")
+    ap.add_argument("--distance", type=float, default=60.0,
+                    help="camera distance (zoom)")
+    ap.add_argument("--pitch", type=float, default=35.0,
+                    help="camera tilt in degrees")
+    args = ap.parse_args()
+
+    if args.screenshot is not None:
+        angles = [float(a) for a in args.angles.split(",") if a.strip()]
+        render_screenshots(args.screenshot, angles, args.distance, args.pitch)
+        return 0
+
     try:
         app = App()
         app.run()
