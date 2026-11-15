@@ -6,6 +6,8 @@ from __future__ import annotations
 import numpy as np
 import wgpu
 
+from .. import config
+
 # Code-generated 5x7 bitmap font: 7 rows of 5 cells (# = pixel).
 _FONT_ROWS = {
     ' ': ['.....', '.....', '.....', '.....', '.....', '.....', '.....'],
@@ -153,8 +155,11 @@ class DebugOverlay:
         self._texture = None
         self._view = None
         self._sampler = None
+        self._uniforms = None
         self._pipeline = None
         self._bind_group = None
+        self._content_w = 1
+        self._content_h = 1
         self._build_resources()
 
     def _build_resources(self):
@@ -169,6 +174,10 @@ class DebugOverlay:
             mag_filter="nearest",
             min_filter="nearest",
         )
+        self._uniforms = device.create_buffer(
+            size=16,
+            usage=wgpu.BufferUsage.UNIFORM | wgpu.BufferUsage.COPY_DST,
+        )
         vs = """
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -179,10 +188,17 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var xy = array<vec2f, 4>(vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0));
     var uv = array<vec2f, 4>(vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0));
     var output: VertexOutput;
-    output.position = vec4f(xy[vertex_index] * 2.0 - 1.0, 0.0, 1.0);
-    output.uv = uv[vertex_index];
+    output.position = vec4f(xy[vertex_index] * overlay.quad_size * 2.0
+                            - vec2f(1.0, 1.0), 0.0, 1.0);
+    output.uv = uv[vertex_index] * overlay.uv_scale;
     return output;
 }
+
+struct Overlay {
+    quad_size: vec2f,
+    uv_scale: vec2f,
+};
+@group(0) @binding(2) var<uniform> overlay: Overlay;
 """
         fs = """
 @group(0) @binding(0) var text_sampler: sampler;
@@ -219,6 +235,7 @@ fn fs_main(@location(0) uv: vec2f) -> FragmentOutput {
             entries=[
                 {"binding": 0, "resource": self._sampler},
                 {"binding": 1, "resource": self._view},
+                {"binding": 2, "resource": {"buffer": self._uniforms}},
             ],
         )
 
@@ -234,12 +251,22 @@ fn fs_main(@location(0) uv: vec2f) -> FragmentOutput {
             self.bitmap_w = max(self.bitmap_w, w)
             self.bitmap_h = max(self.bitmap_h, h)
             self._build_resources()
+        self._content_w = w
+        self._content_h = h
         self.device.queue.write_texture(
             {"texture": self._texture},
             bitmap.tobytes(),
             {"bytes_per_row": w},
             {"width": w, "height": h, "depth_or_array_layers": 1},
         )
+        scale = 2.0
+        uniforms = np.array([
+            self._content_w * scale / config.WINDOW_WIDTH,
+            self._content_h * scale / config.WINDOW_HEIGHT,
+            self._content_w / self.bitmap_w,
+            self._content_h / self.bitmap_h,
+        ], dtype=np.float32)
+        self.device.queue.write_buffer(self._uniforms, 0, uniforms.tobytes())
 
     def _dirty(self) -> bool:
         bitmap = render_text_to_bitmap(
@@ -269,4 +296,3 @@ fn fs_main(@location(0) uv: vec2f) -> FragmentOutput {
         rpass.set_bind_group(0, self._bind_group)
         rpass.draw(4)
         rpass.end()
-
