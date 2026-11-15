@@ -120,7 +120,9 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var xy = array<vec2f, 4>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(1.0, 1.0));
-    var uv = array<vec2f, 4>(vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0));
+    // The render target's texture origin is top-left while clip-space Y=-1
+    // is the bottom of the window.  Invert texture Y for the present pass.
+    var uv = array<vec2f, 4>(vec2f(0.0, 1.0), vec2f(1.0, 1.0), vec2f(0.0, 0.0), vec2f(1.0, 0.0));
     var output: VertexOutput;
     output.position = vec4f(xy[vertex_index], 0.0, 1.0);
     output.uv = uv[vertex_index];

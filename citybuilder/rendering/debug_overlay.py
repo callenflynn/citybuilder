@@ -188,8 +188,11 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var xy = array<vec2f, 4>(vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0));
     var uv = array<vec2f, 4>(vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0), vec2f(1.0, 1.0));
     var output: VertexOutput;
-    output.position = vec4f(xy[vertex_index] * overlay.quad_size * 2.0
-                            - vec2f(1.0, 1.0), 0.0, 1.0);
+    var screen_xy = vec2f(
+        xy[vertex_index].x * overlay.quad_size.x * 2.0 - 1.0,
+        1.0 - xy[vertex_index].y * overlay.quad_size.y * 2.0,
+    );
+    output.position = vec4f(screen_xy, 0.0, 1.0);
     output.uv = uv[vertex_index] * overlay.uv_scale;
     return output;
 }
