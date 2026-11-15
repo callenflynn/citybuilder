@@ -440,21 +440,26 @@ class Renderer:
         device = self.device
         gb = self._gpu_buffers
 
-        # Terrain: merge all chunk meshes; per-vertex color from height.
-        t_verts, t_idx = [], []
-        t_index_offset = 0
+        # Terrain: upload each chunk as an independent static mesh.  Chunks
+        # can then be rebuilt or culled independently as streaming evolves;
+        # merging them here would make every terrain edit invalidate the whole
+        # visible world.
+        terrain_chunks = []
         for ch in chunks:
             pos, i = build_chunk_mesh(ch)
             col = _height_color(pos[:, 1])
             v = np.concatenate([pos, col], axis=1)
-            t_verts.append(v)
-            t_idx.append(i + t_index_offset)
-            t_index_offset += v.shape[0]
-        if t_verts:
-            t_ib = np.concatenate(t_idx).astype(np.uint32)
-            gb["terrain_vb"] = self._vertex_buffer(np.concatenate(t_verts), slot=0)
-            gb["terrain_ib"] = self._index_buffer(t_ib)
-            self.terrain_count = int(t_ib.size)
+            ib = np.asarray(i, dtype=np.uint32)
+            terrain_chunks.append({
+                "cx": ch.cx,
+                "cy": ch.cy,
+                "vb": self._vertex_buffer(v, slot=0),
+                "ib": self._index_buffer(ib),
+                "count": int(ib.size),
+            })
+            self.terrain_count += int(ib.size)
+        if terrain_chunks:
+            gb["terrain_chunks"] = terrain_chunks
 
         # Roads: ribbons per segment.
         r_verts, r_idx = [], []
@@ -506,13 +511,13 @@ class Renderer:
                 "depth_load_op": "clear",
                 "depth_store_op": "store",
             })
-        if self.terrain_count:
+        for chunk in self._gpu_buffers.get("terrain_chunks", []):
             rpass.set_pipeline(self.terrain_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.terrain_pipeline))
-            rpass.set_vertex_buffer(0, self._gpu_buffers["terrain_vb"], 0)
-            rpass.set_index_buffer(self._gpu_buffers["terrain_ib"],
+            rpass.set_vertex_buffer(0, chunk["vb"], 0)
+            rpass.set_index_buffer(chunk["ib"],
                                    wgpu.IndexFormat.uint32)
-            rpass.draw_indexed(self.terrain_count, 1, 0, 0, 0)
+            rpass.draw_indexed(chunk["count"], 1, 0, 0, 0)
         if self.road_count:
             rpass.set_pipeline(self.road_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.road_pipeline))

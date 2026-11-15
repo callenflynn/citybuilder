@@ -184,7 +184,14 @@ class App:
         }
         bid = 0
         for lot in self.lot_gen.generate().values():
-            key = "tower" if (bid % 7 == 0) else "generic"
+            # Keep the tallest demo building away from the outer road ends.
+            # At the fixed 60-unit verification distance, a tower on the
+            # western edge sits almost on top of the camera at yaw 180° and
+            # legitimately fills the whole frame, hiding the terrain.
+            center_x = sum(p[0] for p in lot.footprint) / len(lot.footprint)
+            center_z = sum(p[1] for p in lot.footprint) / len(lot.footprint)
+            central = abs(center_x) < 20.0 and abs(center_z) < 20.0
+            key = "tower" if central and (bid % 2 == 0) else "generic"
             self.buildings[bid] = make_building(
                 bid, key, lot.footprint, 42 + bid, bdefs)
             bid += 1

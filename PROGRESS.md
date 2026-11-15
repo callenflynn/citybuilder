@@ -5,22 +5,25 @@
 - Repository audit completed against the development specification on 2026-11-14.
 - Fixed editable installation: setuptools now discovers only `citybuilder*` packages, so `pip install -e '.[dev]'` succeeds instead of treating `rust/` as a Python package.
 - Added `scripts/check_all.sh` as the standard verification entry point. It runs pytest, the headless screenshot smoke test, and the 12-angle rotation sweep.
-- Headless rendering is implemented and the screenshot tests cover non-flat scene output and camera-angle differences.
+- Headless rendering is implemented and screenshot tests cover non-flat scene output and camera-angle differences.
 - Depth attachment and depth testing are present in the renderer.
-- The project currently has 45 passing tests when the known rotation regression is excluded; `compileall` and editable installation complete successfully.
+- Fixed the rear-angle regression: the demo's first tower was placed almost on top of the camera at yaw 180°. Towers are now restricted to the central city area; the complete 12-angle sweep passes.
+- Implemented independent per-chunk static terrain GPU meshes. Each visible chunk has its own vertex/index buffers and draw call, so future streaming edits need not invalidate the entire terrain scene.
+- Current automated result: 46 tests passed, including the 12-angle rotation sweep.
 
 ## Broken
 
-- `citybuilder/tests/test_rotation_sweep.py` fails at yaw 180° and 210° with distance 60 and the fixed 35° tilt. Terrain-only rendering succeeds at those angles, but the combined terrain/building scene collapses to a nearly flat frame. This is the first unfinished M1 rendering task and is not being marked fixed without a verified cause.
-- Full `scripts/check_all.sh` is therefore expected to fail at the rotation sweep until the combined-scene regression is fixed.
+- The demo scene currently contains only a small number of buildings and simple crossing roads; it is not yet the required dense 200-building showcase.
 - GUI window mapping remains compositor-dependent; headless rendering is the reliable verification path in this environment.
 - M1.5 features are not implemented: terraforming, water/rivers, world-generation settings, per-city saves, and the map editor.
+- Building placement mode is currently a keyboard toggle only; it does not yet place a building from a mouse ghost preview.
 
 ## Next
 
-1. Diagnose and fix the combined-scene dark-frame regression at the rear yaw angles.
-2. Re-run the full 12-angle rotation sweep and capture updated PNG evidence.
-3. Only after that, continue with the next M1 item: per-chunk static meshes.
+1. Expand the deterministic demo city to at least 200 varied buildings with visible roads and hills.
+2. Add the M1 visual pass: outlines, banded lighting, palette lookup, and texel snapping.
+3. Add a GPU-synchronized benchmark at 100, 1,000, and 5,000 buildings.
+4. Continue with terrain picking and validated two-click road placement.
 
 ## Verification commands
 

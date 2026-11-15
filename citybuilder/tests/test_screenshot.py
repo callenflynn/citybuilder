@@ -39,6 +39,9 @@ def test_headless_app_builds_and_renders_nonflat(tmp_path):
     app.renderer.set_scene(chunks, app.road_graph.segment_list(),
                            list(app.buildings.values()))
     assert app.renderer.terrain_count > 0
+    terrain_chunks = app.renderer._gpu_buffers["terrain_chunks"]
+    assert len(terrain_chunks) == len(chunks)
+    assert all(chunk["count"] > 0 for chunk in terrain_chunks)
     assert app.renderer.road_count > 0
     assert app.renderer.building_count > 0
     app.renderer.set_view_proj(app.camera.view_matrix(),
