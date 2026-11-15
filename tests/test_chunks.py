@@ -20,6 +20,14 @@ def test_chunk_different_seed_different_heightmap():
                               m2.ensure(0, 0).heightmap)
 
 
+def test_placeholder_ground_stays_below_road_overlay():
+    chunk = ChunkManager(seed=42, chunk_size=32).ensure(0, 0)
+    # The first playable scene uses flat roads at y=0.16.  Keep placeholder
+    # terrain below that layer until roads can conform to real terrain.
+    assert float(chunk.heightmap.min()) > 0.0
+    assert float(chunk.heightmap.max()) < 0.16
+
+
 def test_update_loads_around_camera():
     import numpy as np
     m = ChunkManager(seed=7, chunk_size=16, max_chunks=100)
@@ -56,4 +64,3 @@ def test_chunk_mesh_world_offset():
     # first vertex = lower-left corner of the chunk
     assert verts[0, 0] == 8.0   # x = cx*size
     assert verts[0, 2] == 16.0  # z = cy*size
-

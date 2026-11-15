@@ -11,13 +11,15 @@
 - Implemented independent per-chunk static terrain GPU meshes. Each visible chunk has its own vertex/index buffers and draw call, so future streaming edits need not invalidate the entire terrain scene.
 - Expanded the deterministic demo to an 84-segment 7x7 road grid with 216 varied procedural buildings across the blocks.
 - Fixed the interactive debug overlay: the bitmap HUD was incorrectly mapped over a fullscreen quad, stretching green glyphs and pixels across the scene. It now renders only the written bitmap region at crisp 2x scale in the top-left.
-- Current automated result: 46 tests passed, screenshots rendered at 0°, 45°, and 90°, and the 12-angle rotation sweep passed. `scripts/check_all.sh` passes.
+- Replaced the tiled placeholder facade texture in the first scene with readable banded building colors and face lighting; the texture binding remains available for later material work.
+- Stabilized the first playable ground layer: placeholder terrain is kept below the road overlay, roads are lifted above terrain, and road depth writes are disabled so grid intersections do not fight in the depth buffer.
+- Exercised the real interactive RenderCanvas loop under a virtual X display without runtime errors. Current automated result: 47 tests passed, screenshots rendered at 0°, 45°, and 90°, and the 12-angle rotation sweep passed. `scripts/check_all.sh` passes.
 
 ## Broken
 
 - The dense demo is a static showcase; zoning-driven growth and citizen simulation are not yet connected to the visible buildings.
-- The interactive presentation still needs the M1 visual pass: outlines, banded lighting, palette lookup, texel snapping, and a player-facing HUD rather than only debug counters.
-- GUI window mapping remains compositor-dependent; headless rendering is the reliable verification path in this environment.
+- The interactive presentation still needs the remaining M1 visual pass: outlines, palette lookup, texel snapping, and a player-facing HUD rather than only debug counters.
+- GUI window capture remains compositor-dependent; the interactive loop is smoke-tested under Xvfb and headless screenshots remain the reliable visual evidence in this environment.
 - M1.5 features are not implemented: terraforming, water/rivers, world-generation settings, per-city saves, and the map editor.
 - Building placement mode is currently a keyboard toggle only; it does not yet place a building from a mouse ghost preview.
 

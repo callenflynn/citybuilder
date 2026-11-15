@@ -72,6 +72,7 @@ struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) color: vec4f,
     @location(1) uv: vec2f,
+    @location(2) normal: vec3f,
 };
 @vertex
 fn vs_main(@location(0) pos: vec3f,
@@ -84,6 +85,7 @@ fn vs_main(@location(0) pos: vec3f,
     output.position = clip;
     output.color = color;
     output.uv = uv;
+    output.normal = normal;
     return output;
 }
 """
@@ -96,12 +98,19 @@ struct FragmentOutput {
 };
 @fragment
 fn fs_main(@location(0) color: vec4f,
-           @location(1) uv: vec2f) -> FragmentOutput {
+           @location(1) uv: vec2f,
+           @location(2) normal: vec3f) -> FragmentOutput {
+    // Keep the texture binding alive for the data-driven material path, but
+    // use a readable low-frequency palette for the first playable scene.
+    // Sampling the tiled placeholder directly made every facade collapse into
+    // dense diagonal stripes at the game's low internal resolution.
     var texel = textureSample(tex_array, tex_sampler, uv, 0);
-    var levels = 4.0;
-    var quantized = floor(texel.rgb * levels) / levels;
+    var light = max(dot(normalize(normal), normalize(vec3f(-0.45, 0.85, 0.25))), 0.25);
+    var base = color.rgb * (0.55 + 0.45 * light);
+    var levels = 5.0;
+    var quantized = floor(base * levels) / levels;
     var output: FragmentOutput;
-    output.color = vec4f(quantized * color.rgb, color.a * texel.a);
+    output.color = vec4f(quantized, color.a * texel.a);
     return output;
 }
 """
@@ -229,10 +238,14 @@ def _segment_ribbon(seg, steps: int = 12, width: float = 6.0):
         nx, nz = tz, -tx  # normal
         color = (0.5, 0.5, 0.5, 1.0)  # gray road
         # quad: p0-left, p0-right, p1-right, p1-left
-        v00 = add(p0[0] - nx * half, 0.0, p0[1] - nz * half, *color)
-        v01 = add(p0[0] + nx * half, 0.0, p0[1] + nz * half, *color)
-        v11 = add(p1[0] + nx * half, 0.0, p1[1] + nz * half, *color)
-        v10 = add(p1[0] - nx * half, 0.0, p1[1] - nz * half, *color)
+        # Keep roads decisively above the flat terrain surface.  Drawing both
+        # at y=0 makes the depth buffer alternate between the two coplanar
+        # meshes, producing the long diagonal/zebra artifacts seen in-game.
+        road_y = 0.16
+        v00 = add(p0[0] - nx * half, road_y, p0[1] - nz * half, *color)
+        v01 = add(p0[0] + nx * half, road_y, p0[1] + nz * half, *color)
+        v11 = add(p1[0] + nx * half, road_y, p1[1] + nz * half, *color)
+        v10 = add(p1[0] - nx * half, road_y, p1[1] - nz * half, *color)
         idx.extend([v00, v01, v11, v00, v11, v10])
     vertices = np.array(verts, dtype=np.float32).reshape(-1, 7)
     indices = np.array(idx, dtype=np.uint32)
@@ -358,8 +371,10 @@ class Renderer:
                       "targets": [{"format": "bgra8unorm"}]},
             primitive={"topology": "triangle-list"},
             depth_stencil={"format": "depth24plus",
-                            "depth_write_enabled": True,
-                            "depth_compare": "less"},
+                            # Crossing ribbons occupy the same plane at
+                            # intersections, so roads are an overlay layer.
+                            "depth_write_enabled": False,
+                            "depth_compare": "always"},
         )
 
         bs = device.create_shader_module(

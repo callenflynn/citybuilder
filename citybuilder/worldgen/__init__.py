@@ -18,10 +18,16 @@ def generate_chunk(cx: int, cy: int, seed: int, chunk_size: int = 64) -> np.ndar
 
     h = int(hashlib.sha256(f"{seed}:{cx}:{cy}".encode()).hexdigest()[:16], 16)
     rng = np.random.default_rng(h % (2**32))
-    # Smooth-ish placeholder terrain: a few sine waves + noise.
+    # Keep the first playable city on a stable ground plane.  The earlier
+    # placeholder varied from below zero to almost two world units, while
+    # roads and building foundations were flat; that caused roads to dive in
+    # and out of the terrain and read as diagonal geometry corruption.  Leave
+    # only a gentle variation for a little visual breakup until roads can
+    # conform to a fully featured heightmap.
     xs = np.linspace(0, 4, chunk_size, dtype=np.float32)
     ys = np.linspace(0, 4, chunk_size, dtype=np.float32)
     X, Y = np.meshgrid(xs, ys)
-    hmap = (np.sin(X + h * 0.01) + np.cos(Y * 1.3 + h * 0.01)) * 0.5 + 0.5
-    hmap += 0.2 * rng.normal(size=(chunk_size, chunk_size)).astype(np.float32)
+    waves = (np.sin(X + h * 0.01) + np.cos(Y * 1.3 + h * 0.01)) * 0.5
+    hmap = 0.08 + 0.025 * waves
+    hmap += 0.01 * rng.normal(size=(chunk_size, chunk_size)).astype(np.float32)
     return hmap.astype(np.float32)
