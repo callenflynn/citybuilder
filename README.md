@@ -7,7 +7,7 @@ camera. Long-term feature target: Cities: Skylines 2 depth.
 See [`PROJECT_PLAN.md`](PROJECT_PLAN.md) for the full project plan, locked
 decisions, architecture, milestones, risks, and open items.
 
-## Status: M0 Foundations (in progress)
+## Status: M1 First Playable (in progress)
 
 - Project layout, Python package, Rust PyO3 crate skeleton
 - wgpu-py window + low-res render target + nearest-neighbor upscale
@@ -15,6 +15,12 @@ decisions, architecture, milestones, risks, and open items.
 - Headless, fixed-tick, deterministic simulation loop (ECS over flat numpy arrays)
 - Data loader (JSON/TOML/YAML content definitions)
 - Tests (pytest) + profiling setup
+
+The repository is currently being audited against the M1 specification. The
+headless renderer and screenshot path work, but the 12-angle rotation sweep
+still exposes a combined terrain/building regression at yaw 180° and 210°.
+Do not treat M1 as complete until that failure is fixed and the full checker
+passes.
 
 ## Requirements
 
@@ -40,6 +46,9 @@ pytest
 
 # run the standalone render smoke test
 python test_render.py
+
+# run the standard verification command (tests, screenshots, rotation sweep)
+./scripts/check_all.sh
 ```
 
 ## Repository layout
