@@ -273,6 +273,12 @@ class Renderer:
             usage=USAGE,
         )
         self.internal_view = self.internal_texture.create_view()
+        self.depth_texture = self.device.create_texture(
+            size=(self.internal_w, self.internal_h, 1),
+            format="depth24plus",
+            usage=wgpu.TextureUsage.RENDER_ATTACHMENT,
+        )
+        self.depth_view = self.depth_texture.create_view()
         self.internal_sampler = self.device.create_sampler(
             mag_filter="nearest",
             min_filter="nearest",
@@ -340,6 +346,9 @@ class Renderer:
             fragment={"module": vc, "entry_point": "fs_main",
                       "targets": [{"format": "bgra8unorm"}]},
             primitive={"topology": "triangle-list"},
+            depth_stencil={"format": "depth24plus",
+                            "depth_write_enabled": True,
+                            "depth_compare": "less"},
         )
         self.road_pipeline = device.create_render_pipeline(
             layout="auto",
@@ -348,6 +357,9 @@ class Renderer:
             fragment={"module": vc, "entry_point": "fs_main",
                       "targets": [{"format": "bgra8unorm"}]},
             primitive={"topology": "triangle-list"},
+            depth_stencil={"format": "depth24plus",
+                            "depth_write_enabled": True,
+                            "depth_compare": "less"},
         )
 
         bs = device.create_shader_module(
@@ -358,9 +370,11 @@ class Renderer:
                     "buffers": [BUILDING_VERTEX_LAYOUT]},
             fragment={"module": bs, "entry_point": "fs_main",
                       "targets": [{"format": "bgra8unorm"}]},
+            primitive={"topology": "triangle-list"},
+            depth_stencil={"format": "depth24plus",
+                            "depth_write_enabled": True,
+                            "depth_compare": "less"},
         )
-        # Bind group 0 (uniforms) for building pipeline
-        self._building_bg0 = self._uniforms_bind_group_for(self.building_pipeline)
         # Bind group 1 (texture sampler + texture array) for building pipeline
         self._building_bg1 = self.device.create_bind_group(
             layout=self.building_pipeline.get_bind_group_layout(1),
@@ -485,7 +499,13 @@ class Renderer:
                 "clear_value": (0.1, 0.1, 0.15, 1.0),
                 "load_op": "clear",
                 "store_op": "store",
-            }])
+            }],
+            depth_stencil_attachment={
+                "view": self.depth_view,
+                "depth_clear_value": 1.0,
+                "depth_load_op": "clear",
+                "depth_store_op": "store",
+            })
         if self.terrain_count:
             rpass.set_pipeline(self.terrain_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.terrain_pipeline))

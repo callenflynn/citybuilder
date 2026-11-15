@@ -306,7 +306,7 @@ def main():
                     help="render the demo city headless and write PNGs to OUTDIR")
     ap.add_argument("--angles", default="0,45,90",
                     help="comma-separated camera yaw degrees (default 0,45,90)")
-    ap.add_argument("--distance", type=float, default=60.0,
+    ap.add_argument("--distance", type=float, default=150.0,
                     help="camera distance (zoom)")
     ap.add_argument("--pitch", type=float, default=35.0,
                     help="camera tilt in degrees")
