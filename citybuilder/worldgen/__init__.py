@@ -14,20 +14,21 @@ def generate_chunk(cx: int, cy: int, seed: int, chunk_size: int = 64) -> np.ndar
     Deterministic in (cx, cy, seed). Placeholder noise until real terrain
     generation is implemented at M1.5.
     """
-    import hashlib
-
-    h = int(hashlib.sha256(f"{seed}:{cx}:{cy}".encode()).hexdigest()[:16], 16)
-    rng = np.random.default_rng(h % (2**32))
     # Keep the first playable city on a stable ground plane.  The earlier
     # placeholder varied from below zero to almost two world units, while
     # roads and building foundations were flat; that caused roads to dive in
     # and out of the terrain and read as diagonal geometry corruption.  Leave
     # only a gentle variation for a little visual breakup until roads can
     # conform to a fully featured heightmap.
-    xs = np.linspace(0, 4, chunk_size, dtype=np.float32)
-    ys = np.linspace(0, 4, chunk_size, dtype=np.float32)
+    # Use world coordinates rather than chunk-local coordinates.  Independent
+    # per-chunk phases create visible cracks/z-fighting at every chunk edge.
+    world_scale = max(float(chunk_size), 1.0)
+    xs = (np.linspace(0, chunk_size, chunk_size, dtype=np.float32)
+          + cx * chunk_size) / world_scale
+    ys = (np.linspace(0, chunk_size, chunk_size, dtype=np.float32)
+          + cy * chunk_size) / world_scale
     X, Y = np.meshgrid(xs, ys)
-    waves = (np.sin(X + h * 0.01) + np.cos(Y * 1.3 + h * 0.01)) * 0.5
+    seed_phase = float(seed % 997) * 0.01
+    waves = (np.sin(X + seed_phase) + np.cos(Y * 1.3 + seed_phase)) * 0.5
     hmap = 0.08 + 0.025 * waves
-    hmap += 0.01 * rng.normal(size=(chunk_size, chunk_size)).astype(np.float32)
     return hmap.astype(np.float32)

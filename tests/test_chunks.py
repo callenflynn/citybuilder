@@ -28,6 +28,15 @@ def test_placeholder_ground_stays_below_road_overlay():
     assert float(chunk.heightmap.max()) < 0.16
 
 
+def test_adjacent_chunks_share_continuous_boundaries():
+    manager = ChunkManager(seed=42, chunk_size=32)
+    left = manager.ensure(0, 0)
+    right = manager.ensure(1, 0)
+    lower = manager.ensure(0, 1)
+    assert np.allclose(left.heightmap[:, -1], right.heightmap[:, 0])
+    assert np.allclose(left.heightmap[-1, :], lower.heightmap[0, :])
+
+
 def test_update_loads_around_camera():
     import numpy as np
     m = ChunkManager(seed=7, chunk_size=16, max_chunks=100)

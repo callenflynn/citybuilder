@@ -91,8 +91,6 @@ fn vs_main(@location(0) pos: vec3f,
 """
 
 BUILDING_FS = """
-@group(1) @binding(0) var tex_sampler: sampler;
-@group(1) @binding(1) var tex_array: texture_2d_array<f32>;
 struct FragmentOutput {
     @location(0) color: vec4f,
 };
@@ -100,17 +98,15 @@ struct FragmentOutput {
 fn fs_main(@location(0) color: vec4f,
            @location(1) uv: vec2f,
            @location(2) normal: vec3f) -> FragmentOutput {
-    // Keep the texture binding alive for the data-driven material path, but
-    // use a readable low-frequency palette for the first playable scene.
-    // Sampling the tiled placeholder directly made every facade collapse into
-    // dense diagonal stripes at the game's low internal resolution.
-    var texel = textureSample(tex_array, tex_sampler, uv, 0);
+    // The first playable pass deliberately uses only a low-frequency palette.
+    // The old tiled placeholder texture made close-up facades collapse into
+    // repeated horizontal/diagonal bands at the game's internal resolution.
     var light = max(dot(normalize(normal), normalize(vec3f(-0.45, 0.85, 0.25))), 0.25);
     var base = color.rgb * (0.55 + 0.45 * light);
     var levels = 5.0;
     var quantized = floor(base * levels) / levels;
     var output: FragmentOutput;
-    output.color = vec4f(quantized, color.a * texel.a);
+    output.color = vec4f(quantized, color.a);
     return output;
 }
 """
@@ -214,8 +210,14 @@ def _height_color(h: np.ndarray) -> np.ndarray:
     return c
 
 
-def _segment_ribbon(seg, steps: int = 12, width: float = 6.0):
-    """Build a screen-aligned ribbon along a road segment curve."""
+def _segment_ribbon(seg, steps: int = 2, width: float = 6.0):
+    """Build a ribbon along a road segment curve.
+
+    M1 roads are straight, so use one quad per segment.  Subdividing a
+    straight ribbon into many independent quads creates visible one-pixel
+    seams at the low internal resolution; joined curved-road tessellation can
+    be added when curved roads become playable.
+    """
     pts = seg.curve.sample(steps)
     verts: list[float] = []
     idx: list[int] = []
@@ -237,15 +239,20 @@ def _segment_ribbon(seg, steps: int = 12, width: float = 6.0):
         tx, tz = dx / n, dz / n
         nx, nz = tz, -tx  # normal
         color = (0.5, 0.5, 0.5, 1.0)  # gray road
+        # Extend each end a little so adjacent grid segments overlap at their
+        # shared node instead of leaving a one-pixel perspective seam.
+        extension = 0.5
+        p0x, p0z = p0[0] - tx * extension, p0[1] - tz * extension
+        p1x, p1z = p1[0] + tx * extension, p1[1] + tz * extension
         # quad: p0-left, p0-right, p1-right, p1-left
         # Keep roads decisively above the flat terrain surface.  Drawing both
         # at y=0 makes the depth buffer alternate between the two coplanar
         # meshes, producing the long diagonal/zebra artifacts seen in-game.
         road_y = 0.16
-        v00 = add(p0[0] - nx * half, road_y, p0[1] - nz * half, *color)
-        v01 = add(p0[0] + nx * half, road_y, p0[1] + nz * half, *color)
-        v11 = add(p1[0] + nx * half, road_y, p1[1] + nz * half, *color)
-        v10 = add(p1[0] - nx * half, road_y, p1[1] - nz * half, *color)
+        v00 = add(p0x - nx * half, road_y, p0z - nz * half, *color)
+        v01 = add(p0x + nx * half, road_y, p0z + nz * half, *color)
+        v11 = add(p1x + nx * half, road_y, p1z + nz * half, *color)
+        v10 = add(p1x - nx * half, road_y, p1z - nz * half, *color)
         idx.extend([v00, v01, v11, v00, v11, v10])
     vertices = np.array(verts, dtype=np.float32).reshape(-1, 7)
     indices = np.array(idx, dtype=np.uint32)
@@ -370,11 +377,6 @@ class Renderer:
             fragment={"module": vc, "entry_point": "fs_main",
                       "targets": [{"format": "bgra8unorm"}]},
             primitive={"topology": "triangle-list"},
-            depth_stencil={"format": "depth24plus",
-                            # Crossing ribbons occupy the same plane at
-                            # intersections, so roads are an overlay layer.
-                            "depth_write_enabled": False,
-                            "depth_compare": "always"},
         )
 
         bs = device.create_shader_module(
@@ -390,14 +392,6 @@ class Renderer:
                             "depth_write_enabled": True,
                             "depth_compare": "less"},
         )
-        # Bind group 1 (texture sampler + texture array) for building pipeline
-        self._building_bg1 = self.device.create_bind_group(
-            layout=self.building_pipeline.get_bind_group_layout(1),
-            entries=[
-                {"binding": 0, "resource": self.tex_sampler},
-                {"binding": 1, "resource": self.tex_array_view},
-            ])
-
         us = device.create_shader_module(code=UPSCALE_VS + UPSCALE_FS)
         self.upscale_pipeline = device.create_render_pipeline(
             layout="auto",
@@ -533,22 +527,44 @@ class Renderer:
             rpass.set_index_buffer(chunk["ib"],
                                    wgpu.IndexFormat.uint32)
             rpass.draw_indexed(chunk["count"], 1, 0, 0, 0)
+        rpass.end()
+
+        # Roads are a flat color overlay.  Keeping them out of the depth pass
+        # avoids Vulkan depth interpolation cracks along their coplanar quads.
         if self.road_count:
+            rpass = encoder.begin_render_pass(
+                color_attachments=[{
+                    "view": self.internal_view,
+                    "load_op": "load",
+                    "store_op": "store",
+                }])
             rpass.set_pipeline(self.road_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.road_pipeline))
             rpass.set_vertex_buffer(0, self._gpu_buffers["road_vb"], 0)
             rpass.set_index_buffer(self._gpu_buffers["road_ib"],
                                    wgpu.IndexFormat.uint32)
             rpass.draw_indexed(self.road_count, 1, 0, 0, 0)
+            rpass.end()
+
         if self.building_count:
+            rpass = encoder.begin_render_pass(
+                color_attachments=[{
+                    "view": self.internal_view,
+                    "load_op": "load",
+                    "store_op": "store",
+                }],
+                depth_stencil_attachment={
+                    "view": self.depth_view,
+                    "depth_load_op": "load",
+                    "depth_store_op": "store",
+                })
             rpass.set_pipeline(self.building_pipeline)
             rpass.set_bind_group(0, self.uniforms_bind_group_for(self.building_pipeline))
-            rpass.set_bind_group(1, self._building_bg1)
             rpass.set_vertex_buffer(0, self._gpu_buffers["building_vb"], 0)
             rpass.set_index_buffer(self._gpu_buffers["building_ib"],
                                    wgpu.IndexFormat.uint32)
             rpass.draw_indexed(self.building_count, 1, 0, 0, 0)
-        rpass.end()
+            rpass.end()
 
     def read_internal(self):
         """Copy the internal low-res target to CPU and return RGBA uint8 (H, W, 4)."""

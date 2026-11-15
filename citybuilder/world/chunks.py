@@ -106,8 +106,10 @@ def build_chunk_mesh(chunk: Chunk) -> tuple[np.ndarray, np.ndarray]:
     # world offset of the chunk's lower-left corner
     ox = chunk.cx * size
     oz = chunk.cy * size
-    xs = np.linspace(0, size - 1, n, dtype=np.float32) + ox
-    zs = np.linspace(0, size - 1, n, dtype=np.float32) + oz
+    # Include the full chunk interval so adjacent chunks share the boundary
+    # at ox + size / oz + size rather than leaving a one-unit crack.
+    xs = np.linspace(0, size, n, dtype=np.float32) + ox
+    zs = np.linspace(0, size, n, dtype=np.float32) + oz
     X, Z = np.meshgrid(xs, zs)
     Y = hmap.astype(np.float32)
     vertices = np.stack([X, Y, Z], axis=-1).reshape(-1, 3).astype(np.float32)
@@ -123,4 +125,3 @@ def build_chunk_mesh(chunk: Chunk) -> tuple[np.ndarray, np.ndarray]:
             idx.append([v10, v01, v11])
     indices = np.array(idx, dtype=np.uint32).reshape(-1)
     return vertices, indices
-

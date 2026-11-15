@@ -19,7 +19,7 @@ class Camera:
     def __init__(self):
         self.target = [0.0, 0.0, 0.0]  # orbit center (world)
         self.yaw = 0.0                  # radians, 0 = looking along +X
-        self.distance = 40.0            # zoom
+        self.distance = 120.0           # zoom; frame the initial demo city
         self.tilt = math.radians(35.0)  # fixed tilt above horizon
 
         # Smoothing: target values that the camera interpolates toward.
@@ -58,7 +58,10 @@ class Camera:
         for i in range(3):
             self.target[i] += (self._target_target[i] - self.target[i]) * k
         # clamp zoom
-        self.distance = max(5.0, min(self.distance, 200.0))
+        # Do not let the interactive camera enter a building/road mesh.  The
+        # old 5-unit minimum exposed coplanar facade and road geometry as
+        # giant bands after a few zoom-in inputs.
+        self.distance = max(48.0, min(self.distance, 220.0))
 
     # -- derived view data ------------------------------------------------------
     def position(self) -> tuple[float, float, float]:
