@@ -29,6 +29,8 @@ def _assert_real_image(rgba: np.ndarray) -> None:
 def test_headless_app_builds_and_renders_nonflat(tmp_path):
     app = _build_headless_app()
     assert app.renderer.terrain_count == 0  # set_scene not called yet
+    assert app.road_graph.num_segments() >= 80
+    assert len(app.buildings) >= 200
     import math
     app.camera.yaw = 0.0
     app.camera.distance = 60.0

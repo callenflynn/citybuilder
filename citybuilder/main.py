@@ -169,32 +169,57 @@ class App:
     # --- demo city -------------------------------------------------------
     def _build_demo_city(self):
         g = self.road_graph
-        a = g.add_node(-40.0, 0.0)
-        b = g.add_node(40.0, 0.0)
-        g.add_segment(a, b)
-        c = g.add_node(0.0, -40.0)
-        d = g.add_node(0.0, 40.0)
-        g.add_segment(c, d)
+        # A deterministic 7x7 road grid gives the first playable scene enough
+        # frontage to exercise chunk streaming, road ribbons, and procedural
+        # growth without introducing a second world-generation system.
+        grid = list(range(-96, 97, 32))
+        for z in grid:
+            for x0, x1 in zip(grid, grid[1:]):
+                g.add_segment(g.add_node(x0, z), g.add_node(x1, z))
+        for x in grid:
+            for z0, z1 in zip(grid, grid[1:]):
+                g.add_segment(g.add_node(x, z0), g.add_node(x, z1))
         self.lot_gen.generate()
-        import numpy as np
         from citybuilder.world.buildings import BuildingDef
         bdefs = {
             "generic": BuildingDef("generic", floor_count=4),
+            "low": BuildingDef("low", floor_count=2, floor_height=3.5),
+            "mid": BuildingDef("mid", floor_count=6, floor_height=3.5),
             "tower": BuildingDef("tower", floor_count=10, floor_height=3.5),
         }
         bid = 0
-        for lot in self.lot_gen.generate().values():
-            # Keep the tallest demo building away from the outer road ends.
-            # At the fixed 60-unit verification distance, a tower on the
-            # western edge sits almost on top of the camera at yaw 180° and
-            # legitimately fills the whole frame, hiding the terrain.
-            center_x = sum(p[0] for p in lot.footprint) / len(lot.footprint)
-            center_z = sum(p[1] for p in lot.footprint) / len(lot.footprint)
-            central = abs(center_x) < 20.0 and abs(center_z) < 20.0
-            key = "tower" if central and (bid % 2 == 0) else "generic"
-            self.buildings[bid] = make_building(
-                bid, key, lot.footprint, 42 + bid, bdefs)
-            bid += 1
+        # Fill the 6x6 blocks between roads.  Six small footprints per block
+        # gives 216 buildings while keeping every footprint close to a road
+        # frontage and leaving enough gaps for the terrain to show through.
+        for block_z in range(-96, 96, 32):
+            for block_x in range(-96, 96, 32):
+                block_center_x = block_x + 16
+                block_center_z = block_z + 16
+                for dx, dz in ((-8, -8), (0, -8), (8, -8),
+                               (-8, 8), (0, 8), (8, 8)):
+                    center_x = block_center_x + dx
+                    center_z = block_center_z + dz
+                    half = 3.0
+                    footprint = [
+                        (center_x - half, center_z - half),
+                        (center_x + half, center_z - half),
+                        (center_x + half, center_z + half),
+                        (center_x - half, center_z + half),
+                    ]
+                    # Keep the tallest demo buildings away from the outer
+                    # road ends so rear-angle checks retain terrain visibility.
+                    central = abs(center_x) < 20.0 and abs(center_z) < 20.0
+                    if central and bid % 11 == 0:
+                        key = "tower"
+                    elif bid % 3 == 0:
+                        key = "low"
+                    elif bid % 3 == 1:
+                        key = "mid"
+                    else:
+                        key = "generic"
+                    self.buildings[bid] = make_building(
+                        bid, key, footprint, 42 + bid, bdefs)
+                    bid += 1
 
     # --- frame -----------------------------------------------------------
     def on_draw(self, dt: float = 0.0):
